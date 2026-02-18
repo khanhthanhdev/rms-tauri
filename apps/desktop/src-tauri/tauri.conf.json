@@ -28,22 +28,11 @@
   "bundle": {
     "active": true,
     "targets": ["deb", "msi", "nsis"],
+    "icon": [
+      "icons/icon.png",
+      "icons/icon.ico"
+    ],
     "externalBin": ["binaries/rms-server-sidecar"],
-    "resources": ["../../web/dist/**/*"],
-    "windows": [
-      {
-        "wix": [],
-        "certificateThumbprint": null,
-        "digestAlgorithm": "sha256",
-        "signingIdentity": null,
-        "publisher": null,
-        "icons": [
-          {
-            "path": "icons/icon.ico",
-            "sizes": [256, 128, 96, 64, 48, 32, 16]
-          }
-        ]
-      }
-    ]
+    "resources": ["../../web/dist/**/*"]
   }
 }
