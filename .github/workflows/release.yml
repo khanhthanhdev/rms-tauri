@@ -2,8 +2,8 @@ name: Release
 
 on:
   push:
-    branches:
-      - main
+    tags:
+      - "v*"
   workflow_dispatch:
 
 permissions:
@@ -47,11 +47,6 @@ jobs:
             libsoup-3.0-dev \
             libjavascriptcoregtk-4.1-dev
 
-      - name: Install Windows dependencies
-        if: runner.os == 'Windows'
-        run: |
-          choco install nsis -y
-
       - name: Install Bun
         uses: oven-sh/setup-bun@v2
         with:
@@ -72,9 +67,10 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           projectPath: apps/desktop
-          tagName: v__VERSION__
-          releaseName: "RMS Local v__VERSION__"
+          tauriScript: bunx tauri
+          tagName: ${{ github.ref_name }}
+          releaseName: "RMS Local ${{ github.ref_name }}"
           releaseBody: "See the assets below to download and install."
-          releaseDraft: true
+          releaseDraft: false
           prerelease: false
           args: --bundles ${{ matrix.targets }}
