@@ -2,8 +2,8 @@ name: Release
 
 on:
   push:
-    tags:
-      - "v*"
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:
@@ -67,8 +67,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           projectPath: apps/desktop
-          tagName: ${{ github.ref_name }}
-          releaseName: "RMS Local ${{ github.ref_name }}"
+          tagName: v__VERSION__
+          releaseName: "RMS Local v__VERSION__"
           releaseBody: "See the assets below to download and install."
           releaseDraft: true
           prerelease: false
