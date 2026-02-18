@@ -1,0 +1,14 @@
+{
+  "name": "desktop",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "prepare": "bun run --filter web build && bun run --filter server compile:sidecar",
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "check-types": "cargo check --manifest-path src-tauri/Cargo.toml"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.9.3"
+  }
+}

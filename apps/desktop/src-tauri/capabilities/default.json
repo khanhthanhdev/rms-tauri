@@ -1,0 +1,20 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Capability for the launcher",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "opener:default",
+    "shell:allow-open",
+    {
+      "identifier": "shell:allow-spawn",
+      "allow": [
+        {
+          "name": "binaries/rms-server-sidecar",
+          "sidecar": true
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RMS Local Launcher</title>
+    <style>
+    :root {
+      font-family: "Atkinson Hyperlegible", "Segoe UI", sans-serif;
+      color-scheme: light;
+    }
+
+    body {
+      margin: 0;
+      color: #132238;
+      background: #f5f8fb;
+    }
+
+    main {
+      display: grid;
+      gap: 0.75rem;
+      padding: 0.85rem;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 1rem;
+    }
+
+    .card {
+      padding: 0.65rem;
+      background: #ffffff;
+      border: 1px solid #d8e1eb;
+      border-radius: 10px;
+    }
+
+    .row {
+      display: grid;
+      gap: 0.25rem;
+    }
+
+    .label {
+      font-size: 0.75rem;
+      color: #607387;
+    }
+
+    code {
+      font-family: "Iosevka", "Consolas", monospace;
+      font-size: 0.8rem;
+      word-break: break-word;
+    }
+
+    #log-box {
+      max-height: 180px;
+      margin: 0;
+      overflow: auto;
+      font-size: 0.78rem;
+      line-height: 1.4;
+      white-space: pre-wrap;
+    }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>RMS Local Launcher</h1>
+
+      <section class="card row" aria-label="Runtime Information">
+        <div class="row">
+          <span class="label">Local URL</span>
+          <code id="local-url">-</code>
+        </div>
+        <div class="row">
+          <span class="label">LAN URL</span>
+          <code id="lan-url">-</code>
+        </div>
+        <div class="row">
+          <span class="label">Database</span>
+          <code id="db-path">-</code>
+        </div>
+      </section>
+
+      <section class="card" aria-label="Launcher Logs">
+        <div class="label">Logs</div>
+        <pre id="log-box"></pre>
+      </section>
+    </main>
+
+    <script>
+    "use strict";
+    const localUrlElement = document.getElementById("local-url");
+    const lanUrlElement = document.getElementById("lan-url");
+    const dbPathElement = document.getElementById("db-path");
+    const logBoxElement = document.getElementById("log-box");
+    const logLines = [];
+    const MAX_LINES = 250;
+
+    window.setRuntimeInfo = (localUrl, lanUrl, dbPath) => {
+      localUrlElement.textContent = localUrl;
+      lanUrlElement.textContent = lanUrl;
+      dbPathElement.textContent = dbPath;
+    };
+
+    window.appendLog = (message) => {
+      const time = new Date().toLocaleTimeString();
+      logLines.push(`[${time}] ${message}`);
+
+      if (logLines.length > MAX_LINES) {
+        logLines.shift();
+      }
+
+      logBoxElement.textContent = logLines.join("\n");
+      logBoxElement.scrollTop = logBoxElement.scrollHeight;
+    };
+
+    window.appendLog("Launcher initialized.");
+    </script>
+  </body>
+</html>

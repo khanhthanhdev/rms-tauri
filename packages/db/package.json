@@ -1,0 +1,30 @@
+{
+  "name": "@rms-local/db",
+  "type": "module",
+  "exports": {
+    ".": {
+      "default": "./src/index.ts"
+    },
+    "./*": {
+      "default": "./src/*.ts"
+    }
+  },
+  "scripts": {
+    "db:local": "echo 'Using bun:sqlite native (included with Bun)'",
+    "db:push": "drizzle-kit push",
+    "db:generate": "drizzle-kit generate",
+    "db:studio": "drizzle-kit studio",
+    "db:migrate": "drizzle-kit migrate"
+  },
+  "dependencies": {
+    "@rms-local/env": "workspace:*",
+    "dotenv": "catalog:",
+    "drizzle-orm": "^0.45.1",
+    "valibot": "^1.2.0"
+  },
+  "devDependencies": {
+    "@rms-local/config": "workspace:*",
+    "drizzle-kit": "^0.31.8",
+    "typescript": "catalog:"
+  }
+}

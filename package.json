@@ -1,0 +1,51 @@
+{
+  "name": "rms-local",
+  "private": true,
+  "workspaces": {
+    "packages": [
+      "apps/*",
+      "packages/*"
+    ],
+    "catalog": {
+      "dotenv": "^17.2.2",
+      "zod": "^4.1.13",
+      "typescript": "^5",
+      "@types/bun": "^1.3.4",
+      "better-auth": "^1.4.18"
+    }
+  },
+  "type": "module",
+  "scripts": {
+    "dev": "turbo dev",
+    "build": "turbo build",
+    "check-types": "turbo check-types",
+    "dev:desktop": "turbo -F desktop dev",
+    "dev:native": "bun run dev:desktop",
+    "desktop:build": "turbo -F desktop build",
+    "desktop:check": "turbo -F desktop check-types",
+    "dev:web": "turbo -F web dev",
+    "dev:server": "turbo -F server dev",
+    "db:push": "turbo -F @rms-local/db db:push",
+    "db:studio": "turbo -F @rms-local/db db:studio",
+    "db:generate": "turbo -F @rms-local/db db:generate",
+    "db:migrate": "turbo -F @rms-local/db db:migrate",
+    "db:local": "turbo -F @rms-local/db db:local",
+    "check": "ultracite check",
+    "fix": "ultracite fix"
+  },
+  "dependencies": {
+    "@hono/valibot-validator": "^0.6.1",
+    "@rms-local/env": "workspace:*",
+    "dotenv": "catalog:",
+    "valibot": "^1.2.0"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.4.0",
+    "@rms-local/config": "workspace:*",
+    "@types/bun": "catalog:",
+    "turbo": "^2.6.3",
+    "typescript": "catalog:",
+    "ultracite": "7.2.3"
+  },
+  "packageManager": "bun@1.3.6"
+}

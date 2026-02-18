@@ -1,0 +1,24 @@
+{
+  "name": "@rms-local/auth",
+  "type": "module",
+  "exports": {
+    ".": {
+      "default": "./src/index.ts"
+    },
+    "./*": {
+      "default": "./src/*.ts"
+    }
+  },
+  "scripts": {},
+  "dependencies": {
+    "@rms-local/db": "workspace:*",
+    "@rms-local/env": "workspace:*",
+    "better-auth": "catalog:",
+    "dotenv": "catalog:",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@rms-local/config": "workspace:*",
+    "typescript": "catalog:"
+  }
+}
