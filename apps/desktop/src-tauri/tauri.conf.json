@@ -29,6 +29,21 @@
     "active": true,
     "targets": ["deb", "msi", "nsis"],
     "externalBin": ["binaries/rms-server-sidecar"],
-    "resources": ["../../web/dist/**/*"]
+    "resources": ["../../web/dist/**/*"],
+    "windows": [
+      {
+        "wix": [],
+        "certificateThumbprint": null,
+        "digestAlgorithm": "sha256",
+        "signingIdentity": null,
+        "publisher": null,
+        "icons": [
+          {
+            "path": "icons/icon.ico",
+            "sizes": [256, 128, 96, 64, 48, 32, 16]
+          }
+        ]
+      }
+    ]
   }
 }
