@@ -4,8 +4,8 @@
   "version": "0.1.0",
   "identifier": "com.rmslocal.desktop",
   "build": {
-    "beforeDevCommand": "bun run prepare",
-    "beforeBuildCommand": "bun run prepare",
+    "beforeDevCommand": "bun run setup",
+    "beforeBuildCommand": "bun run setup",
     "frontendDist": "../placeholder-dist"
   },
   "app": {
