@@ -59,6 +59,21 @@ Installer output:
 
 End users only install and run the installer output. Bun/Rust are not required on user machines.
 
+## Publish Release
+
+Pushing a version tag triggers the release workflow and publishes installers.
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+What the tag workflow does:
+- Builds desktop release artifacts.
+- Publishes NSIS and MSI assets to the GitHub release for that tag.
+
+Current mode: Windows code signing is disabled.
+
 ## Project Structure
 
 ```text
