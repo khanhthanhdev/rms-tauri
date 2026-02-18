@@ -1,5 +1,5 @@
 use std::fs;
-use std::net::{SocketAddr, TcpStream, UdpSocket};
+use std::net::{SocketAddr, TcpListener, TcpStream, UdpSocket};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -8,7 +8,6 @@ use tauri_plugin_opener::OpenerExt;
 use tauri_plugin_shell::{process::CommandEvent, ShellExt};
 
 const SERVER_HOST: &str = "0.0.0.0";
-const SERVER_PORT: u16 = 80;
 const LOCALHOST: &str = "127.0.0.1";
 const SIDECAR_BINARY: &str = "rms-server-sidecar";
 const WINDOW_LABEL: &str = "main";
@@ -62,9 +61,15 @@ fn set_runtime_info(
     eval_status_script(app, &script);
 }
 
-fn wait_for_server(timeout: Duration) -> bool {
+fn reserve_local_port() -> Result<u16, String> {
+    let listener = TcpListener::bind((LOCALHOST, 0)).map_err(|error| error.to_string())?;
+    let address = listener.local_addr().map_err(|error| error.to_string())?;
+    Ok(address.port())
+}
+
+fn wait_for_server(port: u16, timeout: Duration) -> bool {
     let deadline = Instant::now() + timeout;
-    let address = SocketAddr::from(([127, 0, 0, 1], SERVER_PORT));
+    let address = SocketAddr::from(([127, 0, 0, 1], port));
 
     while Instant::now() < deadline {
         if TcpStream::connect_timeout(&address, Duration::from_millis(250)).is_ok() {
@@ -84,10 +89,6 @@ fn resolve_web_dist(app: &tauri::AppHandle) -> PathBuf {
         .join("web")
         .join("dist");
 
-    if workspace_path.exists() {
-        return workspace_path;
-    }
-
     if let Ok(resource_dir) = app.path().resource_dir() {
         let resource_candidates = [
             resource_dir.join("web-dist"),
@@ -102,11 +103,18 @@ fn resolve_web_dist(app: &tauri::AppHandle) -> PathBuf {
         }
     }
 
+    if workspace_path.exists() {
+        return workspace_path;
+    }
+
     workspace_path
 }
 
 fn start_sidecar(app: &tauri::AppHandle) -> Result<(), String> {
     append_log(app, "Preparing local runtime...");
+
+    let server_port = reserve_local_port()?;
+    append_log(app, &format!("Selected available port: {server_port}"));
 
     let app_data_dir = app.path().app_data_dir().map_err(|error| error.to_string())?;
     fs::create_dir_all(&app_data_dir).map_err(|error| error.to_string())?;
@@ -118,8 +126,8 @@ fn start_sidecar(app: &tauri::AppHandle) -> Result<(), String> {
     let web_dist_text = web_dist.display().to_string();
 
     let lan_ip = detect_lan_ip();
-    let local_url = format_http_url(LOCALHOST, SERVER_PORT);
-    let lan_url = format_http_url(&lan_ip, SERVER_PORT);
+    let local_url = format_http_url(LOCALHOST, server_port);
+    let lan_url = format_http_url(&lan_ip, server_port);
 
     set_runtime_info(app, &local_url, &lan_url, &db_path_text);
     append_log(app, &format!("Database path: {db_path_text}"));
@@ -130,14 +138,14 @@ fn start_sidecar(app: &tauri::AppHandle) -> Result<(), String> {
         "--host".to_string(),
         SERVER_HOST.to_string(),
         "--port".to_string(),
-        SERVER_PORT.to_string(),
+        server_port.to_string(),
         "--db-path".to_string(),
         db_path_text,
         "--web-dist".to_string(),
         web_dist_text,
     ];
 
-    append_log(app, "Starting Bun sidecar...");
+    append_log(app, "Starting sidecar runtime...");
 
     let (mut rx, sidecar) = app
         .shell()
@@ -172,7 +180,7 @@ fn start_sidecar(app: &tauri::AppHandle) -> Result<(), String> {
 
     append_log(app, "Waiting for HTTP server readiness...");
 
-    if wait_for_server(Duration::from_secs(10)) {
+    if wait_for_server(server_port, Duration::from_secs(10)) {
         append_log(app, "Server is ready. Opening browser...");
 
         app.opener()

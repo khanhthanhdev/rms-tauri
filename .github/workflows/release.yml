@@ -15,10 +15,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - platform: ubuntu-22.04
-            targets: deb
-          - platform: windows-latest
-            targets: msi,nsis
+          - id: linux
+            platform: ubuntu-22.04
+            bundles: deb
+            sidecar_target: x86_64-unknown-linux-gnu
+          - id: windows
+            platform: windows-latest
+            bundles: msi,nsis
+            sidecar_target: x86_64-pc-windows-msvc
 
     runs-on: ${{ matrix.platform }}
 
@@ -59,18 +63,102 @@ jobs:
         run: bun run --filter web build
 
       - name: Compile sidecar
+        env:
+          SIDECAR_TARGET_TRIPLE: ${{ matrix.sidecar_target }}
         run: bun run --filter server compile:sidecar
 
       - name: Build Tauri app
-        uses: tauri-apps/tauri-action@v0
+        run: bun run --filter desktop build -- --bundles ${{ matrix.bundles }}
+
+      - name: Sign Windows binaries and installers
+        if: runner.os == 'Windows' && startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          WINDOWS_CERT_BASE64: ${{ secrets.WINDOWS_CERT_BASE64 }}
+          WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+          WINDOWS_TIMESTAMP_URL: ${{ secrets.WINDOWS_TIMESTAMP_URL }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_CERT_BASE64)) {
+            throw "Missing required secret WINDOWS_CERT_BASE64"
+          }
+          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_CERT_PASSWORD)) {
+            throw "Missing required secret WINDOWS_CERT_PASSWORD"
+          }
+
+          $timestampUrl = if ([string]::IsNullOrWhiteSpace($env:WINDOWS_TIMESTAMP_URL)) {
+            "http://timestamp.digicert.com"
+          } else {
+            $env:WINDOWS_TIMESTAMP_URL
+          }
+
+          $certificatePath = Join-Path $env:RUNNER_TEMP "windows-codesign.pfx"
+          [System.IO.File]::WriteAllBytes(
+            $certificatePath,
+            [System.Convert]::FromBase64String($env:WINDOWS_CERT_BASE64)
+          )
+
+          $targets = @()
+          $targets += Get-ChildItem -Path "apps/desktop/src-tauri/target/release" -Filter "desktop*.exe" -ErrorAction SilentlyContinue
+          $targets += Get-ChildItem -Path "apps/desktop/src-tauri/target/release/bundle/nsis" -Filter "*.exe" -ErrorAction SilentlyContinue
+          $targets += Get-ChildItem -Path "apps/desktop/src-tauri/target/release/bundle/msi" -Filter "*.msi" -ErrorAction SilentlyContinue
+
+          if ($targets.Count -eq 0) {
+            throw "No Windows artifacts found to sign"
+          }
+
+          foreach ($target in $targets) {
+            Write-Host "Signing $($target.FullName)"
+            & signtool sign /fd SHA256 /tr $timestampUrl /td SHA256 /f $certificatePath /p $env:WINDOWS_CERT_PASSWORD $target.FullName
+            if ($LASTEXITCODE -ne 0) {
+              throw "Failed signing $($target.FullName)"
+            }
+
+            & signtool verify /pa $target.FullName
+            if ($LASTEXITCODE -ne 0) {
+              throw "Failed signature verification for $($target.FullName)"
+            }
+          }
+
+      - name: Collect Linux artifacts
+        if: runner.os == 'Linux'
+        run: |
+          mkdir -p artifacts
+          cp apps/desktop/src-tauri/target/release/bundle/deb/*.deb artifacts/
+
+      - name: Collect Windows artifacts
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path artifacts -Force | Out-Null
+          Copy-Item "apps/desktop/src-tauri/target/release/bundle/nsis/*.exe" -Destination artifacts -ErrorAction Stop
+          Copy-Item "apps/desktop/src-tauri/target/release/bundle/msi/*.msi" -Destination artifacts -ErrorAction Stop
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
         with:
-          projectPath: apps/desktop
-          tauriScript: bunx tauri
-          tagName: ${{ github.ref_name }}
-          releaseName: "RMS Local ${{ github.ref_name }}"
-          releaseBody: "See the assets below to download and install."
-          releaseDraft: false
+          name: release-${{ matrix.id }}
+          path: artifacts/*
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Publish release assets
+        uses: softprops/action-gh-release@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.RELEASE_GITHUB_TOKEN || secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: RMS Local ${{ github.ref_name }}
+          body: See the assets below to download and install.
+          draft: false
           prerelease: false
-          args: --bundles ${{ matrix.targets }}
+          files: artifacts/*

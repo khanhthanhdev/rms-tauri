@@ -9,7 +9,7 @@ const ARCHITECTURES = {
   arm64: "aarch64",
 } as const;
 
-const TARGET_POSTFIX: Record<
+const TARGET_TRIPLE_BY_HOST: Record<
   NodeJS.Platform,
   Partial<Record<keyof typeof ARCHITECTURES, string>>
 > = {
@@ -29,28 +29,69 @@ const TARGET_POSTFIX: Record<
   netbsd: {},
   sunos: {},
   win32: {
-    x64: "x86_64-pc-windows-msvc.exe",
-    arm64: "aarch64-pc-windows-msvc.exe",
+    x64: "x86_64-pc-windows-msvc",
+    arm64: "aarch64-pc-windows-msvc",
   },
   cygwin: {},
 };
 
-const resolveTargetPostfix = (): string => {
+const TARGET_TRIPLE_ENV_KEYS = [
+  "SIDECAR_TARGET_TRIPLE",
+  "TAURI_TARGET_TRIPLE",
+  "TAURI_ENV_TARGET_TRIPLE",
+  "CARGO_BUILD_TARGET",
+  "npm_config_target",
+] as const;
+
+const normalizeTargetTriple = (value: string): string => {
+  return value.replace(/\.exe$/i, "").trim();
+};
+
+const resolveTargetTriple = (): { targetTriple: string; source: string } => {
+  for (const envKey of TARGET_TRIPLE_ENV_KEYS) {
+    const envValue = process.env[envKey];
+    if (!envValue) {
+      continue;
+    }
+
+    const normalized = normalizeTargetTriple(envValue);
+    if (!normalized) {
+      continue;
+    }
+
+    return {
+      targetTriple: normalized,
+      source: `env:${envKey}`,
+    };
+  }
+
   const platform = process.platform;
   const architecture = process.arch as keyof typeof ARCHITECTURES;
-  const postfix = TARGET_POSTFIX[platform]?.[architecture];
+  const targetTriple = TARGET_TRIPLE_BY_HOST[platform]?.[architecture];
 
-  if (!postfix) {
+  if (!targetTriple) {
     throw new Error(
       `Unsupported platform/architecture for sidecar build: ${platform}/${architecture}`
     );
   }
 
-  return postfix;
+  return {
+    targetTriple,
+    source: `host:${platform}/${architecture}`,
+  };
+};
+
+const getTargetPostfix = (targetTriple: string): string => {
+  if (targetTriple.includes("windows")) {
+    return `${targetTriple}.exe`;
+  }
+
+  return targetTriple;
 };
 
 const compile = async (): Promise<void> => {
-  const targetPostfix = resolveTargetPostfix();
+  const { targetTriple, source } = resolveTargetTriple();
+  const targetPostfix = getTargetPostfix(targetTriple);
   const outDir = path.join(
     import.meta.dir,
     "..",
@@ -63,6 +104,7 @@ const compile = async (): Promise<void> => {
 
   mkdirSync(outDir, { recursive: true });
 
+  console.log(`[sidecar] target triple: ${targetTriple} (${source})`);
   console.log(`[sidecar] compiling ${BINARY_NAME}-${targetPostfix}`);
   await $`bun build --compile --target bun --production --minify --bytecode ./src/index.ts --outfile ${outfile}`;
   console.log(`[sidecar] created ${outfile}`);

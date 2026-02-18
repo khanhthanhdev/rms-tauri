@@ -11,8 +11,8 @@ Turborepo starter for a desktop launcher pattern:
 1. Tauri starts a small launcher window that shows runtime status and logs.
 2. It launches a compiled Bun sidecar binary.
 3. The sidecar initializes SQLite and serves API + web assets.
-4. Tauri opens `http://127.0.0.1` in your default browser.
-5. The server binds `0.0.0.0:80` so LAN devices can reach it via `http://<LAN-IP>` without a custom port.
+4. Tauri selects an available local port and opens `http://127.0.0.1:<PORT>` in your default browser.
+5. The server binds `0.0.0.0:<PORT>` so LAN devices can reach it via `http://<LAN-IP>:<PORT>`.
 
 ## Install
 
@@ -34,15 +34,6 @@ This runs `tauri dev`, which automatically:
 - compiles `apps/server` into sidecar binary at `apps/desktop/src-tauri/binaries`
 - starts Tauri launcher window (local URL, LAN URL, database path, logs)
 
-### Linux note for port 80
-
-Port `80` typically requires elevated bind permission. If launch fails with permission denied,
-grant the sidecar binary capability:
-
-```bash
-sudo setcap 'cap_net_bind_service=+ep' apps/desktop/src-tauri/binaries/rms-server-sidecar-*
-```
-
 ### Individual apps
 
 ```bash
@@ -55,6 +46,18 @@ bun run dev:server
 ```bash
 bun run desktop:build
 ```
+
+Windows release bundles only (`.exe` + `.msi`):
+
+```bash
+bun run desktop:build:win
+```
+
+Installer output:
+- `apps/desktop/src-tauri/target/release/bundle/nsis/*.exe`
+- `apps/desktop/src-tauri/target/release/bundle/msi/*.msi`
+
+End users only install and run the installer output. Bun/Rust are not required on user machines.
 
 ## Project Structure
 

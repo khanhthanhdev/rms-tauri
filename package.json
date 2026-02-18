@@ -22,6 +22,7 @@
     "dev:desktop": "turbo -F desktop dev",
     "dev:native": "bun run dev:desktop",
     "desktop:build": "turbo -F desktop build",
+    "desktop:build:win": "bun run --filter desktop build:win",
     "desktop:check": "turbo -F desktop check-types",
     "dev:web": "turbo -F web dev",
     "dev:server": "turbo -F server dev",
