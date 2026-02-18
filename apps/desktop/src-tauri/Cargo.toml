@@ -5,6 +5,9 @@ description = "RMS desktop launcher"
 authors = ["rms-local"]
 edition = "2021"
 
+[package.metadata]
+tauri-build = { build = "build.rs" }
+
 [lib]
 name = "desktop_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
