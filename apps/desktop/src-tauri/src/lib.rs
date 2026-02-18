@@ -1,6 +1,6 @@
 use std::fs;
 use std::net::{SocketAddr, TcpListener, TcpStream, UdpSocket};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use tauri::Manager;
@@ -82,6 +82,52 @@ fn wait_for_server(port: u16, timeout: Duration) -> bool {
     false
 }
 
+fn has_index_html(directory: &Path) -> bool {
+    directory.join("index.html").is_file()
+}
+
+fn find_web_dist_in_resources(resource_dir: &Path) -> Option<PathBuf> {
+    let direct_candidates = [
+        resource_dir.to_path_buf(),
+        resource_dir.join("web-dist"),
+        resource_dir.join("dist"),
+        resource_dir.join("web").join("dist"),
+        resource_dir.join("_up_").join("_up_").join("web").join("dist"),
+    ];
+
+    for candidate in direct_candidates {
+        if has_index_html(&candidate) {
+            return Some(candidate);
+        }
+    }
+
+    const MAX_SEARCH_DEPTH: usize = 5;
+    let mut stack = vec![(resource_dir.to_path_buf(), 0usize)];
+
+    while let Some((directory, depth)) = stack.pop() {
+        if has_index_html(&directory) {
+            return Some(directory);
+        }
+
+        if depth >= MAX_SEARCH_DEPTH {
+            continue;
+        }
+
+        let Ok(entries) = fs::read_dir(&directory) else {
+            continue;
+        };
+
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push((path, depth + 1));
+            }
+        }
+    }
+
+    None
+}
+
 fn resolve_web_dist(app: &tauri::AppHandle) -> PathBuf {
     let workspace_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("..")
@@ -90,20 +136,12 @@ fn resolve_web_dist(app: &tauri::AppHandle) -> PathBuf {
         .join("dist");
 
     if let Ok(resource_dir) = app.path().resource_dir() {
-        let resource_candidates = [
-            resource_dir.join("web-dist"),
-            resource_dir.join("dist"),
-            resource_dir.join("web").join("dist"),
-        ];
-
-        for candidate in resource_candidates {
-            if candidate.exists() {
-                return candidate;
-            }
+        if let Some(web_dist) = find_web_dist_in_resources(&resource_dir) {
+            return web_dist;
         }
     }
 
-    if workspace_path.exists() {
+    if has_index_html(&workspace_path) {
         return workspace_path;
     }
 
