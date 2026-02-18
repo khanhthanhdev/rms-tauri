@@ -6,6 +6,7 @@
     "setup": "bun run --filter web build && bun run --filter server compile:sidecar",
     "dev": "tauri dev",
     "build": "tauri build",
+    "tauri": "tauri",
     "check-types": "cargo check --manifest-path src-tauri/Cargo.toml"
   },
   "devDependencies": {
