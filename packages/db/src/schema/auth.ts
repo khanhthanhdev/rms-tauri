@@ -9,6 +9,8 @@ export const user = sqliteTable("user", {
     .default(false)
     .notNull(),
   image: text("image"),
+  username: text("username").unique(),
+  displayUsername: text("display_username"),
   createdAt: integer("created_at", { mode: "timestamp_ms" })
     .default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`)
     .notNull(),
@@ -86,6 +88,13 @@ export const verification = sqliteTable(
   },
   (table) => [index("verification_identifier_idx").on(table.identifier)]
 );
+
+export const authSchema = {
+  account,
+  session,
+  user,
+  verification,
+};
 
 export const userRelations = relations(user, ({ many }) => ({
   sessions: many(session),

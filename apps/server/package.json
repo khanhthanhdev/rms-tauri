@@ -11,6 +11,8 @@
     "start": "bun run dist/index.mjs"
   },
   "dependencies": {
+    "@rms-local/auth": "workspace:*",
+    "@rms-local/db": "workspace:*",
     "hono": "^4.8.2"
   },
   "devDependencies": {

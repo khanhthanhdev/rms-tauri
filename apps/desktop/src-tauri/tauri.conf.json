@@ -28,10 +28,7 @@
   "bundle": {
     "active": true,
     "targets": ["deb", "msi", "nsis"],
-    "icon": [
-      "icons/icon.png",
-      "icons/icon.ico"
-    ],
+    "icon": ["icons/icon.png", "icons/icon.ico"],
     "externalBin": ["binaries/rms-server-sidecar"],
     "resources": ["../../web/dist/**/*"]
   }

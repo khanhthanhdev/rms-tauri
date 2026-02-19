@@ -22,13 +22,13 @@ export default function SignInForm({
 
   const form = useForm({
     defaultValues: {
-      email: "",
+      username: "",
       password: "",
     },
     onSubmit: async ({ value }) => {
-      await authClient.signIn.email(
+      await authClient.signIn.username(
         {
-          email: value.email,
+          username: value.username,
           password: value.password,
         },
         {
@@ -46,7 +46,7 @@ export default function SignInForm({
     },
     validators: {
       onSubmit: z.object({
-        email: z.email("Invalid email address"),
+        username: z.string().min(3, "Username must be at least 3 characters"),
         password: z.string().min(8, "Password must be at least 8 characters"),
       }),
     },
@@ -69,16 +69,15 @@ export default function SignInForm({
         }}
       >
         <div>
-          <form.Field name="email">
+          <form.Field name="username">
             {(field) => (
               <div className="space-y-2">
-                <Label htmlFor={field.name}>Email</Label>
+                <Label htmlFor={field.name}>Username</Label>
                 <Input
                   id={field.name}
                   name={field.name}
                   onBlur={field.handleBlur}
                   onChange={(e) => field.handleChange(e.target.value)}
-                  type="email"
                   value={field.state.value}
                 />
                 {field.state.meta.errors.map((error) => (

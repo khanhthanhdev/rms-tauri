@@ -22,16 +22,17 @@ export default function SignUpForm({
 
   const form = useForm({
     defaultValues: {
-      email: "",
+      username: "",
       password: "",
       name: "",
     },
     onSubmit: async ({ value }) => {
       await authClient.signUp.email(
         {
-          email: value.email,
+          email: `${value.username}@local.rms`,
           password: value.password,
           name: value.name,
+          username: value.username,
         },
         {
           onSuccess: () => {
@@ -49,7 +50,7 @@ export default function SignUpForm({
     validators: {
       onSubmit: z.object({
         name: z.string().min(2, "Name must be at least 2 characters"),
-        email: z.email("Invalid email address"),
+        username: z.string().min(3, "Username must be at least 3 characters"),
         password: z.string().min(8, "Password must be at least 8 characters"),
       }),
     },
@@ -94,16 +95,15 @@ export default function SignUpForm({
         </div>
 
         <div>
-          <form.Field name="email">
+          <form.Field name="username">
             {(field) => (
               <div className="space-y-2">
-                <Label htmlFor={field.name}>Email</Label>
+                <Label htmlFor={field.name}>Username</Label>
                 <Input
                   id={field.name}
                   name={field.name}
                   onBlur={field.handleBlur}
                   onChange={(e) => field.handleChange(e.target.value)}
-                  type="email"
                   value={field.state.value}
                 />
                 {field.state.meta.errors.map((error) => (

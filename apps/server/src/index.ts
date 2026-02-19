@@ -1,6 +1,8 @@
 import { Database } from "bun:sqlite";
-import { mkdirSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, unlinkSync } from "node:fs";
 import path from "node:path";
+import type { auth as authInstance } from "@rms-local/auth";
 import { file as bunFile, serve } from "bun";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
@@ -9,13 +11,610 @@ interface ServerOptions {
   dbPath: string;
   host: string;
   port: number;
+  setupToken?: string;
   webDist?: string;
 }
 
 const DEFAULT_SERVER_OPTIONS: ServerOptions = {
-  dbPath: "./data/rms-local.db",
+  dbPath: "./server.db",
   host: "0.0.0.0",
-  port: 3000,
+  port: 80,
+};
+
+type AuthHandler = typeof authInstance;
+
+const ADMIN_ROLE = "ADMIN";
+const LOCALHOST = "127.0.0.1";
+const DEFAULT_CORS_ORIGIN = "http://localhost:5173";
+const MIN_PASSWORD_LENGTH = 8;
+const MIN_USERNAME_LENGTH = 3;
+const SETUP_ALLOWED_ORIGINS = [
+  "tauri://localhost",
+  "https://tauri.localhost",
+  "http://tauri.localhost",
+] as const;
+const USERNAME_PATTERN = /^[A-Za-z0-9._-]+$/;
+const EVENT_CODE_PATTERN = /^[A-Za-z0-9_-]+$/;
+const EVENT_SCHEMA_URL = new URL(
+  "../../../scripts/schema.sql",
+  import.meta.url
+);
+const EVENT_SCHEMA_SQL = readFileSync(EVENT_SCHEMA_URL, "utf-8");
+const CORE_SCHEMA_SQL = `
+  PRAGMA foreign_keys = ON;
+
+  CREATE TABLE IF NOT EXISTS user (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    email TEXT NOT NULL UNIQUE,
+    email_verified INTEGER NOT NULL DEFAULT 0,
+    image TEXT,
+    username TEXT UNIQUE,
+    display_username TEXT,
+    created_at INTEGER NOT NULL DEFAULT (cast(unixepoch('subsecond') * 1000 as integer)),
+    updated_at INTEGER NOT NULL DEFAULT (cast(unixepoch('subsecond') * 1000 as integer))
+  );
+
+  CREATE TABLE IF NOT EXISTS session (
+    id TEXT PRIMARY KEY,
+    expires_at INTEGER NOT NULL,
+    token TEXT NOT NULL UNIQUE,
+    created_at INTEGER NOT NULL DEFAULT (cast(unixepoch('subsecond') * 1000 as integer)),
+    updated_at INTEGER NOT NULL,
+    ip_address TEXT,
+    user_agent TEXT,
+    user_id TEXT NOT NULL REFERENCES user(id) ON DELETE CASCADE
+  );
+  CREATE INDEX IF NOT EXISTS session_userId_idx ON session (user_id);
+
+  CREATE TABLE IF NOT EXISTS account (
+    id TEXT PRIMARY KEY,
+    account_id TEXT NOT NULL,
+    provider_id TEXT NOT NULL,
+    user_id TEXT NOT NULL REFERENCES user(id) ON DELETE CASCADE,
+    access_token TEXT,
+    refresh_token TEXT,
+    id_token TEXT,
+    access_token_expires_at INTEGER,
+    refresh_token_expires_at INTEGER,
+    scope TEXT,
+    password TEXT,
+    created_at INTEGER NOT NULL DEFAULT (cast(unixepoch('subsecond') * 1000 as integer)),
+    updated_at INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS account_userId_idx ON account (user_id);
+
+  CREATE TABLE IF NOT EXISTS verification (
+    id TEXT PRIMARY KEY,
+    identifier TEXT NOT NULL,
+    value TEXT NOT NULL,
+    expires_at INTEGER NOT NULL,
+    created_at INTEGER NOT NULL DEFAULT (cast(unixepoch('subsecond') * 1000 as integer)),
+    updated_at INTEGER NOT NULL DEFAULT (cast(unixepoch('subsecond') * 1000 as integer))
+  );
+  CREATE INDEX IF NOT EXISTS verification_identifier_idx ON verification (identifier);
+
+  CREATE TABLE IF NOT EXISTS config (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS event (
+    id TEXT PRIMARY KEY,
+    code TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL,
+    type INTEGER NOT NULL DEFAULT 0,
+    status INTEGER NOT NULL DEFAULT 0,
+    finals INTEGER NOT NULL DEFAULT 0,
+    divisions INTEGER NOT NULL DEFAULT 0,
+    start INTEGER NOT NULL,
+    end INTEGER NOT NULL,
+    region TEXT NOT NULL,
+    created_at INTEGER NOT NULL DEFAULT (cast(unixepoch('subsecond') * 1000 as integer)),
+    updated_at INTEGER NOT NULL DEFAULT (cast(unixepoch('subsecond') * 1000 as integer))
+  );
+
+  CREATE TABLE IF NOT EXISTS event_log (
+    id TEXT PRIMARY KEY,
+    timestamp INTEGER NOT NULL,
+    type TEXT NOT NULL,
+    event_code TEXT,
+    info TEXT,
+    extra TEXT DEFAULT '[]'
+  );
+  CREATE INDEX IF NOT EXISTS event_log_event_code_idx ON event_log (event_code);
+  CREATE INDEX IF NOT EXISTS event_log_type_idx ON event_log (type);
+
+  CREATE TABLE IF NOT EXISTS user_role (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES user(id) ON DELETE CASCADE,
+    role TEXT NOT NULL,
+    event_code TEXT REFERENCES event(code) ON DELETE CASCADE,
+    created_at INTEGER NOT NULL DEFAULT (cast(unixepoch('subsecond') * 1000 as integer))
+  );
+  CREATE INDEX IF NOT EXISTS user_role_userId_idx ON user_role (user_id);
+  CREATE INDEX IF NOT EXISTS user_role_eventCode_idx ON user_role (event_code);
+  CREATE INDEX IF NOT EXISTS user_role_role_idx ON user_role (role);
+`;
+
+interface EventDetails {
+  divisions: number;
+  end: number;
+  eventCode: string;
+  finals: number;
+  name: string;
+  region: string;
+  start: number;
+  status: number;
+  type: number;
+}
+
+interface AdminSetupPayload {
+  name: string;
+  password: string;
+  username: string;
+}
+
+const resolveAllowedCorsOrigins = (): string[] => {
+  const configuredOrigin = process.env.CORS_ORIGIN ?? DEFAULT_CORS_ORIGIN;
+
+  return [configuredOrigin, ...SETUP_ALLOWED_ORIGINS];
+};
+
+const resolveCorsOrigin = (
+  origin: string | undefined,
+  allowedOrigins: string[]
+): string => {
+  const defaultOrigin = allowedOrigins[0] ?? DEFAULT_CORS_ORIGIN;
+
+  if (!origin) {
+    return defaultOrigin;
+  }
+
+  if (allowedOrigins.includes(origin)) {
+    return origin;
+  }
+
+  return defaultOrigin;
+};
+
+const normalizeUsername = (value: unknown): string | null => {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const username = value.trim();
+  if (username.length < MIN_USERNAME_LENGTH) {
+    return null;
+  }
+
+  if (!USERNAME_PATTERN.test(username)) {
+    return null;
+  }
+
+  return username;
+};
+
+const normalizeDisplayName = (
+  value: unknown,
+  fallbackUsername: string
+): string => {
+  if (typeof value !== "string") {
+    return fallbackUsername;
+  }
+
+  const normalizedName = value.trim();
+  return normalizedName.length > 0 ? normalizedName : fallbackUsername;
+};
+
+const normalizePassword = (value: unknown): string | null => {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  if (value.length < MIN_PASSWORD_LENGTH) {
+    return null;
+  }
+
+  return value;
+};
+
+const parseAdminSetupPayload = (payload: unknown): AdminSetupPayload | null => {
+  if (!payload || typeof payload !== "object") {
+    return null;
+  }
+
+  const data = payload as Record<string, unknown>;
+  const username = normalizeUsername(data.username);
+  const password = normalizePassword(data.password);
+  if (!(username && password)) {
+    return null;
+  }
+
+  return {
+    username,
+    password,
+    name: normalizeDisplayName(data.name, username),
+  };
+};
+
+const normalizeEventCode = (value: unknown): string | null => {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const eventCode = value.trim();
+  if (!(eventCode && EVENT_CODE_PATTERN.test(eventCode))) {
+    return null;
+  }
+  return eventCode;
+};
+
+const buildEventDetails = (
+  data: Record<string, unknown>,
+  eventCode: string
+): EventDetails => {
+  const now = Date.now();
+  const name =
+    typeof data.name === "string" && data.name.trim().length > 0
+      ? data.name.trim()
+      : eventCode;
+  const start = typeof data.start === "number" ? data.start : now;
+  const end = typeof data.end === "number" ? data.end : start;
+  const region =
+    typeof data.region === "string" && data.region.trim().length > 0
+      ? data.region.trim()
+      : "UNKNOWN";
+  const type = typeof data.type === "number" ? data.type : 0;
+  const status = typeof data.status === "number" ? data.status : 0;
+  const finals = typeof data.finals === "number" ? data.finals : 0;
+  const divisions = typeof data.divisions === "number" ? data.divisions : 0;
+
+  return {
+    eventCode,
+    name,
+    start,
+    end,
+    region,
+    type,
+    status,
+    finals,
+    divisions,
+  };
+};
+
+const hasExistingEvent = (db: Database, eventCode: string): boolean => {
+  const existingEvent = db
+    .query("SELECT code FROM event WHERE code = ?1")
+    .get(eventCode) as { code: string } | null;
+  return Boolean(existingEvent);
+};
+
+const isAdminInitialized = (db: Database): boolean => {
+  const existingAdmin = db
+    .query("SELECT id FROM user_role WHERE role = ?1 LIMIT 1")
+    .get(ADMIN_ROLE) as { id: string } | null;
+
+  return Boolean(existingAdmin);
+};
+
+const hasGlobalAdminRole = (db: Database, userId: string): boolean => {
+  const adminRole = db
+    .query(
+      "SELECT id FROM user_role WHERE user_id = ?1 AND role = ?2 AND event_code IS NULL LIMIT 1"
+    )
+    .get(userId, ADMIN_ROLE) as { id: string } | null;
+
+  return Boolean(adminRole);
+};
+
+const insertAdminRole = (db: Database, userId: string): void => {
+  const roleId = crypto.randomUUID();
+  db.query(
+    "INSERT INTO user_role (id, user_id, role, event_code) VALUES (?1, ?2, ?3, ?4)"
+  ).run(roleId, userId, ADMIN_ROLE, null);
+};
+
+const insertAdminBootstrapLog = (
+  db: Database,
+  userId: string,
+  username: string
+): void => {
+  const logId = crypto.randomUUID();
+  db.query(
+    "INSERT INTO event_log (id, timestamp, type, event_code, info, extra) VALUES (?1, ?2, ?3, ?4, ?5, ?6)"
+  ).run(
+    logId,
+    Date.now(),
+    "ADMIN_BOOTSTRAPPED",
+    null,
+    username,
+    JSON.stringify({ role: ADMIN_ROLE, userId })
+  );
+};
+
+const deleteUserById = (db: Database, userId: string): void => {
+  db.query("DELETE FROM user WHERE id = ?1").run(userId);
+};
+
+const insertEvent = (db: Database, details: EventDetails): void => {
+  const eventId = crypto.randomUUID();
+  db.query(
+    "INSERT INTO event (id, code, name, type, status, finals, divisions, start, end, region) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)"
+  ).run(
+    eventId,
+    details.eventCode,
+    details.name,
+    details.type,
+    details.status,
+    details.finals,
+    details.divisions,
+    details.start,
+    details.end,
+    details.region
+  );
+};
+
+const insertEventLog = (
+  db: Database,
+  details: EventDetails,
+  eventDbPath: string
+): void => {
+  const logId = crypto.randomUUID();
+  db.query(
+    "INSERT INTO event_log (id, timestamp, type, event_code, info, extra) VALUES (?1, ?2, ?3, ?4, ?5, ?6)"
+  ).run(
+    logId,
+    Date.now(),
+    "EVENT_CREATED",
+    details.eventCode,
+    details.name,
+    JSON.stringify({ dbPath: eventDbPath })
+  );
+};
+
+const extractUserId = (value: unknown): string | null => {
+  if (!(value && typeof value === "object")) {
+    return null;
+  }
+
+  const user = (value as { user?: { id?: unknown } | null }).user;
+  if (!(user && typeof user === "object")) {
+    return null;
+  }
+
+  return typeof user.id === "string" ? user.id : null;
+};
+
+const resolveUserIdByEmail = (db: Database, email: string): string | null => {
+  const user = db
+    .query("SELECT id FROM user WHERE email = ?1 LIMIT 1")
+    .get(email) as { id: string } | null;
+
+  return user?.id ?? null;
+};
+
+const assignUsernameToUser = (
+  db: Database,
+  userId: string,
+  username: string
+): void => {
+  db.query(
+    "UPDATE user SET username = ?1, display_username = ?2 WHERE id = ?3"
+  ).run(username, username, userId);
+};
+
+const resolveErrorMessage = (error: unknown): string => {
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  if (typeof error === "string") {
+    return error;
+  }
+
+  if (error && typeof error === "object") {
+    const message = (error as { message?: unknown }).message;
+    if (typeof message === "string") {
+      return message;
+    }
+  }
+
+  return "Unknown error.";
+};
+
+const isConflictError = (error: unknown): boolean => {
+  const message = resolveErrorMessage(error).toLowerCase();
+  return (
+    message.includes("unique constraint") ||
+    message.includes("already exists") ||
+    message.includes("already taken")
+  );
+};
+
+const createAdminUser = async (
+  auth: AuthHandler,
+  db: Database,
+  payload: AdminSetupPayload
+): Promise<string> => {
+  const email = `${payload.username}@local.rms`;
+  const signUpResponse = await auth.api.signUpEmail({
+    body: {
+      email,
+      name: payload.name,
+      password: payload.password,
+    },
+  });
+
+  const userId =
+    extractUserId(signUpResponse) ?? resolveUserIdByEmail(db, email);
+  if (!userId) {
+    throw new Error("Failed to resolve created user ID from auth response.");
+  }
+
+  assignUsernameToUser(db, userId, payload.username);
+
+  return userId;
+};
+
+const resolveSessionUserId = async (
+  auth: AuthHandler,
+  request: Request
+): Promise<string | null> => {
+  try {
+    const session = await auth.api.getSession({
+      headers: request.headers,
+    });
+    return extractUserId(session);
+  } catch {
+    return null;
+  }
+};
+
+interface RequestFailure {
+  details?: string;
+  error: string;
+  status: 400 | 401 | 403 | 409 | 500 | 503;
+}
+
+type RequestResult<TValue> = { failure: RequestFailure } | { value: TValue };
+
+const failure = (
+  status: 400 | 401 | 403 | 409 | 500 | 503,
+  error: string,
+  details?: string
+): RequestResult<never> => ({
+  failure: {
+    status,
+    error,
+    details,
+  },
+});
+
+const success = <TValue>(value: TValue): RequestResult<TValue> => ({
+  value,
+});
+
+const validateSetupAdminRequest = (
+  options: ServerOptions,
+  db: Database,
+  requestToken: string | undefined,
+  payload: unknown
+): RequestResult<AdminSetupPayload> => {
+  if (!options.setupToken) {
+    return failure(503, "Setup token is not configured.");
+  }
+
+  if (!requestToken || requestToken !== options.setupToken) {
+    return failure(401, "Invalid setup token.");
+  }
+
+  if (isAdminInitialized(db)) {
+    return failure(409, "Admin is already initialized.");
+  }
+
+  const adminPayload = parseAdminSetupPayload(payload);
+  if (!adminPayload) {
+    return failure(
+      400,
+      "Invalid payload. username and password are required with valid format."
+    );
+  }
+
+  return success(adminPayload);
+};
+
+const bootstrapAdminUser = async (
+  auth: AuthHandler,
+  db: Database,
+  adminPayload: AdminSetupPayload
+): Promise<RequestResult<{ username: string }>> => {
+  let userId: string;
+  try {
+    userId = await createAdminUser(auth, db, adminPayload);
+  } catch (error) {
+    const statusCode = isConflictError(error) ? 409 : 500;
+    return failure(
+      statusCode,
+      statusCode === 409
+        ? "Admin credentials already exist."
+        : "Failed to create admin account.",
+      resolveErrorMessage(error)
+    );
+  }
+
+  try {
+    insertAdminRole(db, userId);
+    insertAdminBootstrapLog(db, userId, adminPayload.username);
+  } catch (error) {
+    try {
+      deleteUserById(db, userId);
+    } catch (cleanupError) {
+      console.error(
+        "[server] failed to rollback admin user after role assignment failure:",
+        resolveErrorMessage(cleanupError)
+      );
+    }
+
+    return failure(
+      500,
+      "Failed to assign ADMIN role.",
+      resolveErrorMessage(error)
+    );
+  }
+
+  return success({
+    username: adminPayload.username,
+  });
+};
+
+const authorizeAdminEventRequest = async (
+  auth: AuthHandler,
+  db: Database,
+  request: Request
+): Promise<RequestResult<null>> => {
+  const sessionUserId = await resolveSessionUserId(auth, request);
+  if (!sessionUserId) {
+    return failure(401, "Authentication required.");
+  }
+
+  if (!hasGlobalAdminRole(db, sessionUserId)) {
+    return failure(403, "Admin role required.");
+  }
+
+  return success(null);
+};
+
+const createEventArtifacts = (
+  db: Database,
+  eventDbDirectory: string,
+  details: EventDetails
+): RequestResult<{ eventDbPath: string }> => {
+  let eventDbPath: string | null = null;
+
+  try {
+    eventDbPath = createEventDatabase(eventDbDirectory, details.eventCode);
+    insertEvent(db, details);
+    insertEventLog(db, details, eventDbPath);
+  } catch (error) {
+    if (eventDbPath) {
+      removeEventDatabase(eventDbPath);
+    }
+
+    const statusCode = isConflictError(error) ? 409 : 500;
+    return failure(
+      statusCode,
+      statusCode === 409
+        ? "Event already exists."
+        : "Failed to create event database.",
+      resolveErrorMessage(error)
+    );
+  }
+
+  if (!eventDbPath) {
+    return failure(500, "Failed to create event database.");
+  }
+
+  return success({ eventDbPath });
 };
 
 const getArgValue = (key: string, fallback?: string): string | undefined => {
@@ -41,19 +640,52 @@ const parseServerOptions = (): ServerOptions => {
   const dbPath =
     getArgValue("db-path", process.env.DB_PATH) ??
     DEFAULT_SERVER_OPTIONS.dbPath;
+  const setupToken = getArgValue("setup-token", process.env.SETUP_TOKEN);
   const webDist = getArgValue("web-dist", process.env.WEB_DIST);
 
   return {
     host,
     port,
     dbPath,
+    setupToken,
     webDist,
   };
+};
+
+const formatOrigin = (host: string, port: number): string => {
+  if (port === 80) {
+    return `http://${host}`;
+  }
+
+  return `http://${host}:${port}`;
+};
+
+const createDefaultAuthSecret = (seed: string): string => {
+  return createHash("sha256").update(seed).digest("hex");
+};
+
+const ensureAuthEnvironment = (
+  options: ServerOptions,
+  resolvedDbPath: string
+): void => {
+  const originHost = options.host === "0.0.0.0" ? LOCALHOST : options.host;
+  const defaultOrigin = formatOrigin(originHost, options.port);
+
+  process.env.CORS_ORIGIN = process.env.CORS_ORIGIN ?? defaultOrigin;
+  process.env.BETTER_AUTH_URL =
+    process.env.BETTER_AUTH_URL ?? `${defaultOrigin}/api/auth`;
+  process.env.BETTER_AUTH_SECRET =
+    process.env.BETTER_AUTH_SECRET ??
+    createDefaultAuthSecret(`rms-local:${resolvedDbPath}`);
 };
 
 const ensureDatabasePath = (dbPath: string): void => {
   const directoryPath = path.dirname(path.resolve(dbPath));
   mkdirSync(directoryPath, { recursive: true });
+};
+
+const initializeCoreSchema = (db: Database): void => {
+  db.exec(CORE_SCHEMA_SQL);
 };
 
 const getCounterOrDefault = (
@@ -67,6 +699,8 @@ const getCounterOrDefault = (
 const initDatabase = (dbPath: string) => {
   ensureDatabasePath(dbPath);
   const db = new Database(dbPath, { create: true });
+
+  initializeCoreSchema(db);
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS app_state (
@@ -93,6 +727,30 @@ const initDatabase = (dbPath: string) => {
     incrementCounter: () =>
       getCounterOrDefault(incrementCounterQuery, "counter"),
   };
+};
+
+const createEventDatabase = (directory: string, eventCode: string): string => {
+  const eventDbPath = path.join(directory, `${eventCode}.db`);
+  if (existsSync(eventDbPath)) {
+    throw new Error("Event database already exists.");
+  }
+
+  ensureDatabasePath(eventDbPath);
+  const eventDb = new Database(eventDbPath, { create: true });
+  try {
+    eventDb.exec(EVENT_SCHEMA_SQL);
+  } finally {
+    eventDb.close();
+  }
+  return eventDbPath;
+};
+
+const removeEventDatabase = (eventDbPath: string): void => {
+  if (!existsSync(eventDbPath)) {
+    return;
+  }
+
+  unlinkSync(eventDbPath);
 };
 
 const normalizeRequestPath = (requestPath: string): string | null => {
@@ -139,18 +797,119 @@ const createApp = (
   options: ServerOptions,
   dbHealthPath: string,
   getCounter: () => number,
-  incrementCounter: () => number
+  incrementCounter: () => number,
+  auth: AuthHandler,
+  db: Database,
+  eventDbDirectory: string
 ) => {
   const app = new Hono();
+  const allowedCorsOrigins = resolveAllowedCorsOrigins();
 
   app.use(
     "/api/*",
     cors({
-      origin: "*",
+      origin: (origin) => resolveCorsOrigin(origin, allowedCorsOrigins),
       allowMethods: ["GET", "POST", "OPTIONS"],
-      allowHeaders: ["Content-Type"],
+      allowHeaders: ["Content-Type", "x-setup-token"],
+      credentials: true,
     })
   );
+
+  app.get("/api/setup/status", (c) => {
+    return c.json({
+      requiresAdminSetup: !isAdminInitialized(db),
+    });
+  });
+
+  app.post("/api/setup/admin", async (c) => {
+    const payload = await c.req.json().catch(() => null);
+    const requestValidation = validateSetupAdminRequest(
+      options,
+      db,
+      c.req.header("x-setup-token"),
+      payload
+    );
+    if ("failure" in requestValidation) {
+      return c.json(
+        {
+          error: requestValidation.failure.error,
+          details: requestValidation.failure.details,
+        },
+        requestValidation.failure.status
+      );
+    }
+
+    const setupResult = await bootstrapAdminUser(
+      auth,
+      db,
+      requestValidation.value
+    );
+    if ("failure" in setupResult) {
+      return c.json(
+        {
+          error: setupResult.failure.error,
+          details: setupResult.failure.details,
+        },
+        setupResult.failure.status
+      );
+    }
+
+    return c.json(
+      {
+        role: ADMIN_ROLE,
+        username: setupResult.value.username,
+      },
+      201
+    );
+  });
+
+  app.on(["POST", "GET"], "/api/auth/**", (c) => auth.handler(c.req.raw));
+
+  app.post("/api/events", async (c) => {
+    const authorization = await authorizeAdminEventRequest(auth, db, c.req.raw);
+    if ("failure" in authorization) {
+      return c.json(
+        { error: authorization.failure.error },
+        authorization.failure.status
+      );
+    }
+
+    const payload = await c.req.json().catch(() => null);
+    if (!payload || typeof payload !== "object") {
+      return c.json({ error: "Invalid request body." }, 400);
+    }
+
+    const data = payload as Record<string, unknown>;
+    const eventCode = normalizeEventCode(data.eventCode);
+    if (!eventCode) {
+      return c.json({ error: "eventCode is required." }, 400);
+    }
+
+    if (hasExistingEvent(db, eventCode)) {
+      return c.json({ error: "Event already exists." }, 409);
+    }
+
+    const details = buildEventDetails(data, eventCode);
+    const eventCreationResult = createEventArtifacts(
+      db,
+      eventDbDirectory,
+      details
+    );
+    if ("failure" in eventCreationResult) {
+      return c.json(
+        {
+          error: eventCreationResult.failure.error,
+          details: eventCreationResult.failure.details,
+        },
+        eventCreationResult.failure.status
+      );
+    }
+
+    return c.json({
+      eventCode,
+      eventDbPath: eventCreationResult.value.eventDbPath,
+    });
+  });
 
   app.get("/api/health", (c) => {
     return c.json({
@@ -193,33 +952,52 @@ const createApp = (
   return app;
 };
 
-const options = parseServerOptions();
-const { db, getCounter, incrementCounter } = initDatabase(options.dbPath);
-const app = createApp(
-  options,
-  path.resolve(options.dbPath),
-  getCounter,
-  incrementCounter
-);
+const main = async (): Promise<void> => {
+  const options = parseServerOptions();
+  const resolvedDbPath = path.resolve(options.dbPath);
+  process.env.DB_PATH = resolvedDbPath;
+  process.env.DATABASE_URL = `file:${resolvedDbPath}`;
+  ensureAuthEnvironment(options, resolvedDbPath);
 
-const server = serve({
-  fetch: app.fetch,
-  hostname: options.host,
-  port: options.port,
-});
-
-console.log(`[server] listening at http://${options.host}:${options.port}`);
-console.log(`[server] using db at ${path.resolve(options.dbPath)}`);
-if (options.webDist) {
-  console.log(
-    `[server] serving web assets from ${path.resolve(options.webDist)}`
+  const { auth } = await import("@rms-local/auth");
+  const { db, getCounter, incrementCounter } = initDatabase(resolvedDbPath);
+  const app = createApp(
+    options,
+    resolvedDbPath,
+    getCounter,
+    incrementCounter,
+    auth,
+    db,
+    path.dirname(resolvedDbPath)
   );
-}
 
-const shutdown = (): void => {
-  server.stop(true);
-  db.close();
+  const server = serve({
+    fetch: app.fetch,
+    hostname: options.host,
+    port: options.port,
+  });
+
+  console.log(`[server] listening at http://${options.host}:${options.port}`);
+  console.log(`[server] using db at ${resolvedDbPath}`);
+  console.log("[server] core schema initialized");
+  if (options.webDist) {
+    console.log(
+      `[server] serving web assets from ${path.resolve(options.webDist)}`
+    );
+  }
+
+  const shutdown = (): void => {
+    server.stop(true);
+    db.close();
+  };
+
+  process.on("SIGTERM", shutdown);
+  process.on("SIGINT", shutdown);
 };
 
-process.on("SIGTERM", shutdown);
-process.on("SIGINT", shutdown);
+main().catch((error: unknown) => {
+  const message =
+    error instanceof Error ? (error.stack ?? error.message) : error;
+  console.error("[server] startup failed:", message);
+  process.exit(1);
+});

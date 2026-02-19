@@ -1,8 +1,9 @@
 use std::fs;
-use std::net::{SocketAddr, TcpListener, TcpStream, UdpSocket};
+use std::net::{SocketAddr, TcpStream, UdpSocket};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use rand::{distributions::Alphanumeric, Rng};
 use tauri::Manager;
 use tauri_plugin_opener::OpenerExt;
 use tauri_plugin_shell::{process::CommandEvent, ShellExt};
@@ -11,6 +12,7 @@ const SERVER_HOST: &str = "0.0.0.0";
 const LOCALHOST: &str = "127.0.0.1";
 const SIDECAR_BINARY: &str = "rms-server-sidecar";
 const WINDOW_LABEL: &str = "main";
+const DEFAULT_WEB_PORT: u16 = 80;
 
 fn format_http_url(host: &str, port: u16) -> String {
     if port == 80 {
@@ -54,17 +56,20 @@ fn set_runtime_info(
     local_url: &str,
     lan_url: &str,
     db_path: &str,
+    setup_token: &str,
 ) {
     let script = format!(
-        "window.setRuntimeInfo?.({local_url:?}, {lan_url:?}, {db_path:?});"
+        "window.setRuntimeInfo?.({local_url:?}, {lan_url:?}, {db_path:?}, {setup_token:?});"
     );
     eval_status_script(app, &script);
 }
 
-fn reserve_local_port() -> Result<u16, String> {
-    let listener = TcpListener::bind((LOCALHOST, 0)).map_err(|error| error.to_string())?;
-    let address = listener.local_addr().map_err(|error| error.to_string())?;
-    Ok(address.port())
+fn generate_setup_token() -> String {
+    rand::thread_rng()
+        .sample_iter(Alphanumeric)
+        .take(48)
+        .map(char::from)
+        .collect()
 }
 
 fn wait_for_server(port: u16, timeout: Duration) -> bool {
@@ -92,7 +97,11 @@ fn find_web_dist_in_resources(resource_dir: &Path) -> Option<PathBuf> {
         resource_dir.join("web-dist"),
         resource_dir.join("dist"),
         resource_dir.join("web").join("dist"),
-        resource_dir.join("_up_").join("_up_").join("web").join("dist"),
+        resource_dir
+            .join("_up_")
+            .join("_up_")
+            .join("web")
+            .join("dist"),
     ];
 
     for candidate in direct_candidates {
@@ -151,13 +160,22 @@ fn resolve_web_dist(app: &tauri::AppHandle) -> PathBuf {
 fn start_sidecar(app: &tauri::AppHandle) -> Result<(), String> {
     append_log(app, "Preparing local runtime...");
 
-    let server_port = reserve_local_port()?;
-    append_log(app, &format!("Selected available port: {server_port}"));
+    // Port availability is not pre-checked to avoid a TOCTOU race; if port 80
+    // is unavailable the sidecar will fail to bind and its error will surface
+    // through the stderr log and the readiness-timeout path below.
+    let server_port = DEFAULT_WEB_PORT;
+    append_log(
+        app,
+        "Using fixed HTTP port 80 so LAN users can access via http://<LAN_IP>.",
+    );
 
-    let app_data_dir = app.path().app_data_dir().map_err(|error| error.to_string())?;
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| error.to_string())?;
     fs::create_dir_all(&app_data_dir).map_err(|error| error.to_string())?;
 
-    let db_path = app_data_dir.join("rms-local.db");
+    let db_path = app_data_dir.join("server.db");
     let db_path_text = db_path.display().to_string();
 
     let web_dist = resolve_web_dist(app);
@@ -166,8 +184,9 @@ fn start_sidecar(app: &tauri::AppHandle) -> Result<(), String> {
     let lan_ip = detect_lan_ip();
     let local_url = format_http_url(LOCALHOST, server_port);
     let lan_url = format_http_url(&lan_ip, server_port);
+    let setup_token = generate_setup_token();
 
-    set_runtime_info(app, &local_url, &lan_url, &db_path_text);
+    set_runtime_info(app, &local_url, &lan_url, &db_path_text, &setup_token);
     append_log(app, &format!("Database path: {db_path_text}"));
     append_log(app, &format!("Serving web assets from: {web_dist_text}"));
     append_log(app, &format!("LAN URL: {lan_url}"));
@@ -181,6 +200,8 @@ fn start_sidecar(app: &tauri::AppHandle) -> Result<(), String> {
         db_path_text,
         "--web-dist".to_string(),
         web_dist_text,
+        "--setup-token".to_string(),
+        setup_token,
     ];
 
     append_log(app, "Starting sidecar runtime...");

@@ -50,6 +50,36 @@
       word-break: break-word;
     }
 
+    input {
+      box-sizing: border-box;
+      width: 100%;
+      padding: 0.45rem 0.5rem;
+      border: 1px solid #c6d3e0;
+      border-radius: 8px;
+      font-size: 0.84rem;
+    }
+
+    button {
+      padding: 0.5rem 0.7rem;
+      border: 0;
+      border-radius: 8px;
+      background: #0f61b5;
+      color: #ffffff;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    button:disabled {
+      cursor: not-allowed;
+      opacity: 0.6;
+    }
+
+    #setup-status {
+      margin: 0;
+      font-size: 0.78rem;
+      color: #35506c;
+    }
+
     #log-box {
       max-height: 180px;
       margin: 0;
@@ -79,6 +109,26 @@
         </div>
       </section>
 
+      <section class="card row" id="admin-setup-card" aria-label="Admin Setup" hidden>
+        <div class="label">First-Run ADMIN Setup</div>
+        <form class="row" id="admin-setup-form">
+          <div class="row">
+            <label class="label" for="admin-name">Display Name (optional)</label>
+            <input autocomplete="name" id="admin-name" name="name" type="text">
+          </div>
+          <div class="row">
+            <label class="label" for="admin-username">Username</label>
+            <input autocomplete="username" id="admin-username" minlength="3" name="username" required type="text">
+          </div>
+          <div class="row">
+            <label class="label" for="admin-password">Password</label>
+            <input autocomplete="new-password" id="admin-password" minlength="8" name="password" required type="password">
+          </div>
+          <button id="admin-submit" type="submit">Initialize ADMIN</button>
+        </form>
+        <p id="setup-status">Checking setup status...</p>
+      </section>
+
       <section class="card" aria-label="Launcher Logs">
         <div class="label">Logs</div>
         <pre id="log-box"></pre>
@@ -91,16 +141,18 @@
     const lanUrlElement = document.getElementById("lan-url");
     const dbPathElement = document.getElementById("db-path");
     const logBoxElement = document.getElementById("log-box");
+    const adminSetupCardElement = document.getElementById("admin-setup-card");
+    const adminSetupFormElement = document.getElementById("admin-setup-form");
+    const adminSubmitElement = document.getElementById("admin-submit");
+    const setupStatusElement = document.getElementById("setup-status");
     const logLines = [];
     const MAX_LINES = 250;
-
-    window.setRuntimeInfo = (localUrl, lanUrl, dbPath) => {
-      localUrlElement.textContent = localUrl;
-      lanUrlElement.textContent = lanUrl;
-      dbPathElement.textContent = dbPath;
+    const runtime = {
+      localUrl: "",
+      setupToken: "",
     };
 
-    window.appendLog = (message) => {
+    const appendLog = (message) => {
       const time = new Date().toLocaleTimeString();
       logLines.push(`[${time}] ${message}`);
 
@@ -111,6 +163,116 @@
       logBoxElement.textContent = logLines.join("\n");
       logBoxElement.scrollTop = logBoxElement.scrollHeight;
     };
+
+    const setSetupStatus = (message) => {
+      setupStatusElement.textContent = message;
+    };
+
+    const refreshAdminSetupStatus = async () => {
+      if (!runtime.localUrl) {
+        return;
+      }
+
+      try {
+        const response = await fetch(`${runtime.localUrl}/api/setup/status`);
+        if (!response.ok) {
+          throw new Error(`Status check failed (${response.status})`);
+        }
+
+        const data = await response.json();
+        if (data.requiresAdminSetup) {
+          adminSetupCardElement.hidden = false;
+          setSetupStatus("ADMIN setup required.");
+          appendLog("ADMIN setup is required.");
+          return;
+        }
+
+        adminSetupCardElement.hidden = true;
+        appendLog("ADMIN is already initialized.");
+      } catch (error) {
+        adminSetupCardElement.hidden = false;
+        const message = error instanceof Error ? error.message : "Unknown error.";
+        setSetupStatus(`Failed to check setup status: ${message}`);
+        appendLog(`Failed to check setup status: ${message}`);
+      }
+    };
+
+    const submitAdminSetup = async (event) => {
+      event.preventDefault();
+
+      const formData = new FormData(adminSetupFormElement);
+      const nameValue = formData.get("name");
+      const usernameValue = formData.get("username");
+      const passwordValue = formData.get("password");
+      const name = typeof nameValue === "string" ? nameValue.trim() : "";
+      const username = typeof usernameValue === "string" ? usernameValue.trim() : "";
+      const password = typeof passwordValue === "string" ? passwordValue : "";
+
+      if (username.length < 3) {
+        setSetupStatus("Username must be at least 3 characters.");
+        return;
+      }
+
+      if (password.length < 8) {
+        setSetupStatus("Password must be at least 8 characters.");
+        return;
+      }
+
+      if (!runtime.setupToken) {
+        setSetupStatus("Setup token unavailable.");
+        return;
+      }
+
+      adminSubmitElement.disabled = true;
+      setSetupStatus("Initializing ADMIN...");
+
+      try {
+        const response = await fetch(`${runtime.localUrl}/api/setup/admin`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-setup-token": runtime.setupToken,
+          },
+          body: JSON.stringify({
+            name,
+            password,
+            username,
+          }),
+        });
+
+        const data = await response.json().catch(() => null);
+        if (!response.ok) {
+          const errorMessage = data && typeof data.error === "string" ? data.error : `Request failed (${response.status})`;
+          throw new Error(errorMessage);
+        }
+
+        setSetupStatus("ADMIN initialized.");
+        appendLog("ADMIN initialized successfully.");
+        adminSetupFormElement.reset();
+        await refreshAdminSetupStatus();
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Unknown error.";
+        setSetupStatus(`Failed: ${message}`);
+        appendLog(`ADMIN setup failed: ${message}`);
+      } finally {
+        adminSubmitElement.disabled = false;
+      }
+    };
+
+    window.setRuntimeInfo = (localUrl, lanUrl, dbPath, setupToken) => {
+      localUrlElement.textContent = localUrl;
+      lanUrlElement.textContent = lanUrl;
+      dbPathElement.textContent = dbPath;
+      runtime.localUrl = localUrl;
+      runtime.setupToken = setupToken;
+      void refreshAdminSetupStatus();
+    };
+
+    adminSetupFormElement.addEventListener("submit", (event) => {
+      void submitAdminSetup(event);
+    });
+
+    window.appendLog = appendLog;
 
     window.appendLog("Launcher initialized.");
     </script>
