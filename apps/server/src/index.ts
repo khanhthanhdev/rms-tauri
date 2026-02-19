@@ -18,7 +18,7 @@ interface ServerOptions {
 const DEFAULT_SERVER_OPTIONS: ServerOptions = {
   dbPath: "./server.db",
   host: "0.0.0.0",
-  port: 80,
+  port: 2026,
 };
 
 type AuthHandler = typeof authInstance;

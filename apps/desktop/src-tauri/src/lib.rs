@@ -12,7 +12,7 @@ const SERVER_HOST: &str = "0.0.0.0";
 const LOCALHOST: &str = "127.0.0.1";
 const SIDECAR_BINARY: &str = "rms-server-sidecar";
 const WINDOW_LABEL: &str = "main";
-const DEFAULT_WEB_PORT: u16 = 80;
+const DEFAULT_WEB_PORT: u16 = 2026;
 
 fn format_http_url(host: &str, port: u16) -> String {
     if port == 80 {
@@ -166,7 +166,7 @@ fn start_sidecar(app: &tauri::AppHandle) -> Result<(), String> {
     let server_port = DEFAULT_WEB_PORT;
     append_log(
         app,
-        "Using fixed HTTP port 80 so LAN users can access via http://<LAN_IP>.",
+        "Using fixed HTTP port 2026 so LAN users can access via http://<LAN_IP>:2026.",
     );
 
     let app_data_dir = app
